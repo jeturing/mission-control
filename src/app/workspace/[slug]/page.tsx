@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState, lazy, Suspense, type ReactNode } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { ChevronLeft, ListTodo, Users, Activity, Settings as SettingsIcon, ExternalLink, Home, BarChart3 } from 'lucide-react';
+import { ChevronLeft, ListTodo, Users, Activity, Settings as SettingsIcon, ExternalLink, Home, BarChart3, Monitor, LayoutGrid, Tv2 } from 'lucide-react';
 import { Header } from '@/components/Header';
 import { AgentsSidebar } from '@/components/AgentsSidebar';
 import { MissionQueue } from '@/components/MissionQueue';
@@ -14,7 +14,11 @@ import { useSSE } from '@/hooks/useSSE';
 import { debug } from '@/lib/debug';
 import type { Task, Workspace } from '@/lib/types';
 
+const PixelOffice = lazy(() => import('@/components/pixel-office/PixelOffice'));
+const MonitorGrid = lazy(() => import('@/components/monitor-grid/MonitorGrid'));
+
 type MobileTab = 'queue' | 'agents' | 'feed' | 'settings';
+type ViewMode = 'board' | 'office' | 'monitor';
 
 export default function WorkspacePage() {
   const params = useParams();
@@ -26,6 +30,7 @@ export default function WorkspacePage() {
   const [notFound, setNotFound] = useState(false);
   const [mobileTab, setMobileTab] = useState<MobileTab>('queue');
   const [isPortrait, setIsPortrait] = useState(true);
+  const [viewMode, setViewMode] = useState<ViewMode>('board');
 
   useSSE();
 
@@ -208,10 +213,83 @@ export default function WorkspacePage() {
     <div className="h-screen flex flex-col bg-mc-bg overflow-hidden">
       <Header workspace={workspace} isPortrait={isPortrait} />
 
+      {/* View mode toggle */}
+      <div className="hidden lg:flex items-center gap-1 px-4 py-1.5 border-b border-mc-border bg-mc-bg-secondary/50">
+        <button
+          onClick={() => setViewMode('board')}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition ${
+            viewMode === 'board'
+              ? 'bg-mc-accent text-mc-bg'
+              : 'text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg-tertiary'
+          }`}
+        >
+          <LayoutGrid className="w-3.5 h-3.5" />
+          Board
+        </button>
+        <button
+          onClick={() => setViewMode('office')}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition ${
+            viewMode === 'office'
+              ? 'bg-mc-accent text-mc-bg'
+              : 'text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg-tertiary'
+          }`}
+        >
+          <Monitor className="w-3.5 h-3.5" />
+          Office
+        </button>
+        <button
+          onClick={() => setViewMode('monitor')}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition ${
+            viewMode === 'monitor'
+              ? 'bg-mc-accent text-mc-bg'
+              : 'text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg-tertiary'
+          }`}
+        >
+          <Tv2 className="w-3.5 h-3.5" />
+          Monitor
+        </button>
+      </div>
+
+      {/* Desktop layout */}
       <div className="hidden lg:flex flex-1 overflow-hidden">
-        <AgentsSidebar workspaceId={workspace.id} />
-        <MissionQueue workspaceId={workspace.id} />
-        <LiveFeed />
+        {viewMode === 'board' ? (
+          <>
+            <AgentsSidebar workspaceId={workspace.id} />
+            <MissionQueue workspaceId={workspace.id} />
+            <LiveFeed />
+          </>
+        ) : viewMode === 'office' ? (
+          <div className="flex flex-1 overflow-hidden">
+            <div className="flex-1 p-3">
+              <Suspense fallback={
+                <div className="w-full h-full flex items-center justify-center bg-[#12121e] rounded-lg">
+                  <div className="text-center">
+                    <div className="text-3xl mb-2 animate-pulse">🎮</div>
+                    <p className="text-xs text-mc-text-secondary font-mono">Loading Pixel Office...</p>
+                  </div>
+                </div>
+              }>
+                <PixelOffice />
+              </Suspense>
+            </div>
+            <div className="w-80 flex flex-col border-l border-mc-border">
+              <div className="flex-1 overflow-y-auto">
+                <LiveFeed />
+              </div>
+            </div>
+          </div>
+        ) : (
+          <Suspense fallback={
+            <div className="w-full h-full flex items-center justify-center">
+              <div className="text-center">
+                <div className="text-3xl mb-2 animate-pulse">📺</div>
+                <p className="text-xs text-mc-text-secondary font-mono">Loading Monitor Grid...</p>
+              </div>
+            </div>
+          }>
+            <MonitorGrid />
+          </Suspense>
+        )}
       </div>
 
       <div
