@@ -49,6 +49,9 @@ export class OpenClawClient extends EventEmitter {
   private pendingRequests = new Map<string | number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
   private connected = false;
   private authenticated = false; // Track auth state separately from connection state
+  private pairingPending: { requestId: string; deviceId: string } | null = null; // Pairing in progress
+  private pairingResolve: (() => void) | null = null;
+  private pairingReject: ((error: Error) => void) | null = null;
   private connecting: Promise<void> | null = null; // Lock to prevent multiple simultaneous connection attempts
   private autoReconnect = true;
   private token: string;
@@ -231,7 +234,8 @@ export class OpenClawClient extends EventEmitter {
           // Log close reason for debugging
           console.log(`[OpenClaw] Disconnected from Gateway (code: ${event.code}, reason: "${event.reason}", wasClean: ${event.wasClean})`);
           // Only auto-reconnect if we were previously connected (not on initial connection failure)
-          if (this.autoReconnect && wasConnected) {
+          // and not while waiting for device pairing resolution
+          if (this.autoReconnect && wasConnected && !this.pairingPending) {
             this.scheduleReconnect();
           }
         };
@@ -320,8 +324,8 @@ export class OpenClawClient extends EventEmitter {
                 id: requestId,
                 method: 'connect',
                 params: {
-                  minProtocol: 3,
-                  maxProtocol: 3,
+                  minProtocol: 4,
+                  maxProtocol: 4,
                   client: {
                     id: clientId,
                     version: '1.0.1',
@@ -341,12 +345,53 @@ export class OpenClawClient extends EventEmitter {
                   this.connected = true;
                   this.authenticated = true;
                   this.connecting = null;
+                  this.pairingPending = null;
+                  this.pairingResolve = null;
+                  this.pairingReject = null;
                   this.emit('connected');
                   console.log('[OpenClaw] Authenticated successfully');
                   resolve();
                 },
                 reject: (error: Error) => {
                   this.connecting = null;
+                  // Handle PAIRING_REQUIRED: wait for device.pair.resolved event instead of failing
+                  const msg = error.message || '';
+                  const detailsCode = (error as any)?.details?.code || '';
+                  if (msg.includes('PAIRING_REQUIRED') || detailsCode === 'PAIRING_REQUIRED' || msg.includes('not-paired')) {
+                    console.log('[OpenClaw] Pairing required, waiting for device.pair.resolved...');
+                    this.pairingPending = {
+                      requestId: (error as any)?.details?.requestId || requestId,
+                      deviceId: (error as any)?.details?.deviceId || (this.deviceIdentity?.deviceId || ''),
+                    };
+                    this.pairingReject = (err) => {
+                      this.pairingPending = null;
+                      this.pairingResolve = null;
+                      this.pairingReject = null;
+                      reject(new Error(`Pairing failed: ${err.message}`));
+                    };
+                    this.pairingResolve = () => {
+                      this.connected = true;
+                      this.authenticated = true;
+                      this.connecting = null;
+                      this.pairingPending = null;
+                      this.pairingResolve = null;
+                      this.pairingReject = null;
+                      this.emit('connected');
+                      console.log('[OpenClaw] Pairing resolved, authenticated successfully');
+                      resolve();
+                    };
+                    // Timeout pairing resolution after 5 minutes
+                    setTimeout(() => {
+                      if (this.pairingPending) {
+                        this.pairingPending = null;
+                        const rej = this.pairingReject;
+                        this.pairingReject = null;
+                        this.pairingResolve = null;
+                        rej(new Error('Pairing resolution timeout'));
+                      }
+                    }, 5 * 60 * 1000);
+                    return;
+                  }
                   this.ws?.close();
                   reject(new Error(`Authentication failed: ${error.message}`));
                 }
@@ -410,6 +455,27 @@ export class OpenClawClient extends EventEmitter {
 
     // Handle events/notifications
     if (data.method) {
+      // Handle device.pair.resolved event for pairing flow
+      if (data.method === 'device.pair.resolved' && this.pairingPending) {
+        const decision = data.params?.decision;
+        if (decision === 'approved') {
+          console.log('[OpenClaw] Device pairing approved');
+          const res = this.pairingResolve;
+          this.pairingResolve = null;
+          this.pairingReject = null;
+          this.pairingPending = null;
+          res?.();
+          return;
+        } else if (decision === 'rejected' || decision === 'expired') {
+          console.log('[OpenClaw] Device pairing', decision);
+          const rej = this.pairingReject;
+          this.pairingResolve = null;
+          this.pairingReject = null;
+          this.pairingPending = null;
+          rej?.(new Error(decision));
+          return;
+        }
+      }
       this.emit('notification', data);
       this.emit(data.method, data.params);
     }
@@ -461,15 +527,15 @@ export class OpenClawClient extends EventEmitter {
   }
 
   async getSessionHistory(sessionId: string): Promise<unknown[]> {
-    return this.call<unknown[]>('sessions.history', { session_id: sessionId });
+    return this.call<unknown[]>('chat.history', { sessionKey: sessionId });
   }
 
-  async sendMessage(sessionId: string, content: string): Promise<void> {
-    await this.call('sessions.send', { session_id: sessionId, content });
+  async sendMessage(sessionKey: string, content: string): Promise<unknown> {
+    return this.call('sessions.send', { key: sessionKey, message: content });
   }
 
-  async createSession(channel: string, peer?: string): Promise<OpenClawSessionInfo> {
-    return this.call<OpenClawSessionInfo>('sessions.create', { channel, peer });
+  async createSession(key: string, agentId?: string): Promise<OpenClawSessionInfo> {
+    return this.call<OpenClawSessionInfo>('sessions.create', { key, ...(agentId ? { agentId } : {}) });
   }
 
   // Agent methods

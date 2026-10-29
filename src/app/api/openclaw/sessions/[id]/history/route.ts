@@ -28,7 +28,7 @@ export async function GET(request: Request, { params }: RouteParams) {
   } catch (error) {
     console.error('Failed to get OpenClaw session history:', error);
     return NextResponse.json(
-      { error: 'Internal server error' },
+      { error: 'Internal server error', details: String(error) },
       { status: 500 }
     );
   }

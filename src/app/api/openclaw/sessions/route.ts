@@ -88,7 +88,7 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error('Failed to create OpenClaw session:', error);
     return NextResponse.json(
-      { error: 'Internal server error' },
+      { error: 'Internal server error', details: String(error) },
       { status: 500 }
     );
   }
